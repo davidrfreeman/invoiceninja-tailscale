@@ -1,0 +1,63 @@
+name: InvoiceNinja
+services:
+  in-tailscale:
+    image: tailscale/tailscale:v1.92.4
+    container_name: in-tailscale
+    hostname: invoiceninja
+    env_file:
+      - ./.ts.env
+    volumes:
+      - ./tailscale:/var/lib/tailscale
+      - ./tailscale/serve/serve.json:/config/serve.json:ro
+
+  in-database:
+    image: mariadb:11.8.5-ubi9
+    container_name: in-database
+    network_mode: service:in-tailscale
+    restart: unless-stopped
+    volumes:
+      - /mnt/nas_share/invoice-ninja/db_data:/var/lib/mysql
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${DB_DATABASE}
+      MARIADB_USERNAME: ${DB_USERNAME}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_HOST: ${MARIADB_HOST}
+
+  in-app:
+    image: invoiceninja/invoiceninja-debian:5.12.44
+    container_name: in-app
+    network_mode: service:in-tailscale
+    depends_on:
+      in-database:
+        condition: service_started
+      in-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    volumes:
+      - /mnt/nas_share/invoice-ninja/storage:/var/www/html/storage:rw,delegated
+      - /mnt/nas_share/invoice-ninja/public:/var/www/html/public:rw,delegated
+
+  in-caddy:
+    image: caddy:alpine
+    container_name: in-caddy
+    network_mode: service:in-tailscale
+    depends_on:
+      - in-app
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /mnt/nas_share/invoice-ninja/public:/var/www/html/public:ro
+      - /mnt/nas_share/invoice-ninja/storage:/var/www/html/storage:ro
+    restart: unless-stopped
+
+  in-redis:
+    image: redis:alpine
+    container_name: in-redis
+    network_mode: service:in-tailscale
+    restart: unless-stopped
+    volumes:
+      - /mnt/nas_share/invoice-ninja/redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
